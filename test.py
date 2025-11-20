@@ -1,3 +1,4 @@
+# eval/test
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,13 +9,18 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.datasets import CIFAR10
 from torchvision.models import resnet18, resnet34, resnet50
 import torchvision.transforms as transforms
+from torchsummary import summary
 
 import numpy as np
 import time
+import pickle
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
+
+from eqCLR.eq_resnet import EqResNet18
+from evaluation import model_eval
 
 ###################### PARAMS ##############################
 
@@ -34,6 +40,8 @@ PRINT_EVERY_EPOCHS = 5
 
 MODEL_FILENAME = f"path_mnist-{BACKBONE}_wo_rotation-{np.random.randint(10000):04}.pt"
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 ###################### DATA LOADER #########################
 
 pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transforms.ToTensor())
@@ -51,7 +59,7 @@ class RandomRightAngleRotation:
 transforms_ssl = transforms.Compose(
     [
         transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
-        # RandomRightAngleRotation(), # additional rotation
+        RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
@@ -126,7 +134,51 @@ backbones = {
    "resnet50": resnet50,    # backbone_output_dim = 2048
 }
 
-model = ResNetwithProjector(backbones[BACKBONE])
+model_resnet18 = ResNetwithProjector(backbones[BACKBONE]).to(device)
+model_resnet18_wo_rotation = ResNetwithProjector(backbones[BACKBONE]).to(device)
 
-print(model)
+model_resnet18.load_state_dict(torch.load('results/model_weights/path_mnist-resnet18-1146.pt', weights_only=True))
+model_resnet18_wo_rotation.load_state_dict(torch.load('results/model_weights/path_mnist-resnet18_wo_rotation-7711.pt', weights_only=True))
 
+print('resnet loaded.')
+
+model_eq = EqResNet18(N=4).to(device)
+model_eq_w_rotation = EqResNet18(N=4).to(device)
+
+model_eq.load_state_dict(torch.load('results/model_weights/path_mnist-eqCLR_resnet18_wo_rotation-3957.pt', weights_only=True))
+model_eq_w_rotation.load_state_dict(torch.load('results/model_weights/path_mnist-eqCLR_resnet18_with_rotation-3943.pt', weights_only=True))
+
+print('eq resnet loaded.')
+
+###################### EVALUATION #########################
+transforms_classifier = transforms.Compose(
+    [
+        transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
+        transforms.RandomHorizontalFlip(),
+        RandomRightAngleRotation(), # additional rotation
+        transforms.ToTensor(),
+    ]
+)
+
+pmnist_train_classifier = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transforms_classifier)
+
+pmnist_loader_classifier = DataLoader(
+    pmnist_train_classifier,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=N_CPU_WORKERS,
+)
+
+models = {
+    # "SimCLR": model_resnet18,
+    # "SimCLR_wo_rotation": model_resnet18_wo_rotation,
+    "eqCLR": model_eq,
+    "eqCLR_w_rotation": model_eq_w_rotation,
+}
+
+for model_name, model in models.items():
+    print(f"Evaluating {model_name}...")
+    eval_dict = model_eval(model, pmnist_train, pmnist_test, pmnist_loader_classifier, n_classes=9, dim_represenations=512)
+
+    with open(f'results/model_eval/eval_dict_{model_name}_pathmnist.pkl', 'wb') as f:
+        pickle.dump(eval_dict, f)

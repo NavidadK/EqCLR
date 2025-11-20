@@ -1,3 +1,4 @@
+# eqCLR_pmnist
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,7 @@ import torchvision.transforms as transforms
 
 import numpy as np
 import time
+import pickle
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
@@ -32,7 +34,7 @@ CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
 
-MODEL_FILENAME = f"path_mnist-eqCLR_resnet18_with_rotation-{np.random.randint(10000):04}.pt"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_with_rotation"
 
 ###################### DATA LOADER #########################
 
@@ -169,5 +171,26 @@ print(
 )
 
 model.eval()
-torch.save(model.state_dict(), MODEL_FILENAME)
+torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}.pt')
 print(f"Model saved to {MODEL_FILENAME}")
+
+model_details = {
+    "Filename": MODEL_FILENAME,
+    "N_EPOCHS": N_EPOCHS,
+    "BATCH_SIZE": BATCH_SIZE,
+    "BASE_LR": BASE_LR,
+    "WEIGHT_DECAY": WEIGHT_DECAY,
+    "MOMENTUM": MOMENTUM,
+    "CROP_LOW_SCALE": CROP_LOW_SCALE,
+    "GRAYSCALE_PROB": GRAYSCALE_PROB,
+    "model_state_dict": model.state_dict(),
+    "BACKBONE": BACKBONE,
+    "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
+    "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
+    "Time": training_end_time - training_start_time,
+}
+
+with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
+    pickle.dump(model_details, f)
+    
+print(f"Model details saved to {MODEL_FILENAME}_details.pkl")

@@ -1,3 +1,4 @@
+# evaluation.py
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
@@ -200,4 +201,3 @@ def model_eval(model, data_train, data_test, loader_classifier, n_classes, dim_r
     eval_dict["linear_accuracy_aug"] = lin_acc_aug
 
     return eval_dict
-
