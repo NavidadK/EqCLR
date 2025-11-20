@@ -1,0 +1,4 @@
+simclr-cifar10/
+data/
+__pycache__/
+results/
