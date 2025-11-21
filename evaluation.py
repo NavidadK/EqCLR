@@ -62,7 +62,7 @@ def eval_logreg(X_train, y_train, X_test, y_test):
 
     return log_reg, lin_acc
 
-def lin_eval_rep(X_train, y_train, X_test, y_test, n_epochs=100, adam_lr=0.01, device=device):
+def lin_eval_rep(X_train, y_train, X_test, y_test, n_epochs=100, adam_lr=0.01, device=device, return_model=False):
 
     X_train = torch.tensor(X_train, device=device)
     X_test = torch.tensor(X_test, device=device)
@@ -96,9 +96,12 @@ def lin_eval_rep(X_train, y_train, X_test, y_test, n_epochs=100, adam_lr=0.01, d
     acc = (yhat.argmax(axis=1) == y_test).cpu().numpy().mean()
     print(f"Linear accuracy (Adam on precomputed representations): {acc}", flush=True)
 
-    return acc
+    if return_model:
+        return acc, classifier
+    else:
+        return acc
 
-def lin_eval_aug(test_data, loader_classifier, model, n_classes, dim_represenations, n_epochs=100, adam_lr=0.01, adam_wd=5e-6, print_every_epochs=5, device=device):
+def lin_eval_aug(test_data, loader_classifier, model, n_classes, dim_represenations, n_epochs=100, adam_lr=0.01, adam_wd=5e-6, print_every_epochs=5, device=device, return_model=False):
     classifier = nn.Linear(dim_represenations, n_classes)
     # for param in model.backbone.parameters():
     #     param.requires_grad = False
@@ -171,7 +174,10 @@ def lin_eval_aug(test_data, loader_classifier, model, n_classes, dim_represenati
     print('acc', acc)
     print(f"Linear accuracy (trained with augmentations): {acc}", flush=True)
 
-    return acc
+    if return_model:
+        return acc, classifier
+    else:
+        return acc
 
 
 def model_eval(model, data_train, data_test, loader_classifier, n_classes, dim_represenations):
