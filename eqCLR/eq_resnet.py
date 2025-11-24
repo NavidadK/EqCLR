@@ -97,7 +97,7 @@ class EqBasicBlock(enn.EquivariantModule):
     #     return shape
 
 class EqResNet18(nn.Module):
-    def __init__(self, N=4, n_classes=128):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128):
         super().__init__()
         # Define the rotational and flip symmetry group
         self.r2_act = gspaces.rot2dOnR2(N)
@@ -142,10 +142,10 @@ class EqResNet18(nn.Module):
         c = self.gpool.out_type.size
         
         self.fully_net = nn.Sequential(
-            nn.Linear(c, 1024),
+            nn.Linear(c, projector_hidden_size),
             # nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.Linear(1024, n_classes),
+            nn.Linear(projector_hidden_size, n_classes),
         )
 
     def _make_layer(self, in_type, out_type, blocks, stride=1):
