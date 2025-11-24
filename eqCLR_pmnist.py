@@ -17,10 +17,9 @@ from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
 
 from eqCLR.eq_resnet import EqResNet18
+from evaluation import model_eval
 
 ###################### PARAMS ##############################
-
-BACKBONE = "resnet18"
 
 BATCH_SIZE = 512
 N_EPOCHS = 100 # 1000
@@ -34,7 +33,7 @@ CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_with_rotation"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_wo_rot_N8"
 
 ###################### DATA LOADER #########################
 
@@ -53,7 +52,7 @@ class RandomRightAngleRotation:
 transforms_ssl = transforms.Compose(
     [
         transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
-        RandomRightAngleRotation(), # additional rotation
+        # RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
@@ -97,7 +96,7 @@ def infoNCE(features, temperature=0.5):
 
     return F.cross_entropy(cos_xx, targets)
 
-model = EqResNet18(N=4)
+model = EqResNet18(N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 
 optimizer = SGD(
     model.parameters(),
@@ -171,8 +170,8 @@ print(
 )
 
 model.eval()
-torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}.pt')
-print(f"Model saved to {MODEL_FILENAME}")
+torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_weights.pt')
+print(f"Model saved to {MODEL_FILENAME}_weights.pt")
 
 model_details = {
     "Filename": MODEL_FILENAME,
@@ -183,14 +182,44 @@ model_details = {
     "MOMENTUM": MOMENTUM,
     "CROP_LOW_SCALE": CROP_LOW_SCALE,
     "GRAYSCALE_PROB": GRAYSCALE_PROB,
-    "model_state_dict": model.state_dict(),
-    "BACKBONE": BACKBONE,
     "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
-    "Time": training_end_time - training_start_time,
+    "Training augmentations": transforms_ssl,
+    "Training time": training_end_time - training_start_time,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
     pickle.dump(model_details, f)
     
 print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
+
+###################### EVALUATION #########################
+transforms_classifier = transforms.Compose(
+    [
+        transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
+        transforms.RandomHorizontalFlip(),
+        RandomRightAngleRotation(), # additional rotation
+        transforms.ToTensor(),
+    ]
+)
+
+pmnist_train_classifier = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transforms_classifier)
+
+pmnist_loader_classifier = DataLoader(
+    pmnist_train_classifier,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=N_CPU_WORKERS,
+)
+
+eval_dict = model_eval(
+    model,
+    pmnist_train,
+    pmnist_test,
+    pmnist_loader_classifier,
+    n_classes=9,
+    dim_represenations=512,
+)
+
+with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
+    pickle.dump(eval_dict, f)
