@@ -127,6 +127,7 @@ def lin_eval_aug(test_data, loader_classifier, model, n_classes, dim_represenati
             optimizer.zero_grad()
 
             h, _ = model(view.to(device))
+            h = h.detach() 
             logits = classifier(h)
             loss = F.cross_entropy(logits, y.to(device).squeeze().long())
             epoch_loss += loss.item()
