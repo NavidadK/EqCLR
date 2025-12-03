@@ -47,6 +47,14 @@ def eval_knn(X_train, y_train, X_test, y_test):
             print(f"KNN (k={k}, metric={metric}): {acc*100:.2f}%")
 
     return eval_dict
+
+def eval_knn_single(X_train, y_train, X_test, y_test, metric='euclidean', n_neighbors=10):
+
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric=metric, n_jobs=-1)
+    knn.fit(X_train, y_train)
+    acc = knn.score(X_test, y_test)
+
+    return acc
     
 def eval_logreg(X_train, y_train, X_test, y_test):
     # Logistic Regression
