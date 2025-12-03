@@ -1,6 +1,7 @@
 import torch
 from torch import nn as nn
 import torch.nn.functional as F
+from torchvision.models.resnet import BasicBlock, Bottleneck
 
 from escnn import gspaces
 from escnn import nn as enn
@@ -75,32 +76,21 @@ class EqBasicBlock(enn.EquivariantModule):
         return out
     
     def evaluate_output_shape(self, input_shape: Tuple):
-        assert len(input_shape) == 4
-        assert input_shape[1] == self.in_type.size
-        if self.shortcut is not None:
-            return self.shortcut.evaluate_output_shape(input_shape)
-        else:
-            return input_shape
+        pass
+        # assert len(input_shape) == 4
+        # assert input_shape[1] == self.in_type.size
+        # if self.shortcut is not None:
+        #     return self.shortcut.evaluate_output_shape(input_shape)
+        # else:
+        #     return input_shape
     
-    # def evaluate_output_shape(self, input_shape):
-    #     """
-    #     input_shape: (batch, channels, height, width)
-    #     returns the output shape of this module
-    #     """
-    #     # Compute shape after conv1
-    #     shape = self.conv1.evaluate_output_shape(input_shape)
-    #     # conv2
-    #     shape = self.conv2.evaluate_output_shape(shape)
-    #     # If downsample exists, its output shape must match
-    #     if self.downsample is not None:
-    #         shape = self.downsample.evaluate_output_shape(input_shape)
-    #     return shape
 
 class EqResNet18(nn.Module):
-    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool=True):
         super().__init__()
         # Define the rotational and flip symmetry group
         self.r2_act = gspaces.rot2dOnR2(N)
+        self.maxpool = maxpool
 
         # if N != 1:
         #     self.r2_act = gspaces.flipRot2dOnR2(N)
@@ -118,21 +108,23 @@ class EqResNet18(nn.Module):
 
         # initial conv + BN + ReLU
         #self.conv1 = conv7x7(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
-        self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
+        if gaussian_blur:
+            self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=2, padding=1), 
+                                              enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=1, padding=3))
+        else:
+            self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
+
         self.bn1 = enn.InnerBatchNorm(self.feat64)
         self.relu = enn.ReLU(self.feat64)
-        # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=3, stride=2, padding=1)
+        # maxpooling desctroys equivariance -> alternatives?
+        # self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=3, stride=2, padding=1)
+        self.maxpool = enn.PointwiseAvgPoolAntialiased2D(self.feat64, sigma=0.33, stride=2, padding=1)
 
         # ResNet layers
-        # self.layer1 = self._make_layer(self.feat64, self.feat64, blocks=2)
-        # self.layer2 = self._make_layer(self.feat64, self.feat128, blocks=2, stride=2)
-        # self.layer3 = self._make_layer(self.feat128, self.feat256, blocks=2, stride=2)
-        # self.layer4 = self._make_layer(self.feat256, self.feat512, blocks=2, stride=2)
-        self.layer1 = self._make_layer(self.maxpool.out_type, self.feat64, blocks=2)
-        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2)
-        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2)
-        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2)
+        self.layer1 = self._make_layer(self.relu.out_type, self.feat64, blocks=2, gaussian_blur=gaussian_blur)
+        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2, gaussian_blur=gaussian_blur)
+        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2, gaussian_blur=gaussian_blur)
+        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2, gaussian_blur=gaussian_blur)
         
         # Pooling
         #self.pool = enn.PointwiseMaxPool2D(self.layer4.out_type, kernel_size=3, stride=1, padding=0)
@@ -148,12 +140,16 @@ class EqResNet18(nn.Module):
             nn.Linear(projector_hidden_size, n_classes),
         )
 
-    def _make_layer(self, in_type, out_type, blocks, stride=1):
+    def _make_layer(self, in_type, out_type, blocks, stride=1, gaussian_blur=False):
         layers = []
         downsample = None
 
         if stride != 1 or in_type != out_type:
-            downsample = conv1x1(in_type, out_type, stride=stride, bias=False)
+            if gaussian_blur:
+                downsample = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(in_type, sigma=0.33, stride=stride, padding=1), 
+                                                  conv1x1(in_type, out_type, stride=1, bias=False))
+            else:
+                downsample = conv1x1(in_type, out_type, stride=stride, bias=False)
 
         layers.append(EqBasicBlock(in_type, out_type, stride, downsample))
         for _ in range(1, blocks):
@@ -167,7 +163,8 @@ class EqResNet18(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)
+        if self.maxpool:
+            x = self.maxpool(x)
         # x = enn.GeometricTensor(self.maxpool(x.tensor), x.type)
 
         x = self.layer1(x)
@@ -187,3 +184,55 @@ class EqResNet18(nn.Module):
         z = self.fully_net(hidden)
 
         return hidden, z
+    
+
+class Mixed_EqResnet18(nn.Module):
+    def __init__(self, backbone_network, N=4, projector_hidden_size=1024, n_classes=128):
+        super().__init__()
+        # Define the rotational and flip symmetry group
+        self.r2_act = gspaces.rot2dOnR2(N)
+
+        self.in_type = enn.FieldType(self.r2_act, 3 * [self.r2_act.trivial_repr])
+
+        # feature types for each stage
+        self.feat64 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * 64)
+
+        # Equivariant block
+        self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=1, padding=1)
+        self.bn1 = enn.InnerBatchNorm(self.feat64)
+        self.relu = enn.ReLU(self.feat64)
+        self.gpool = enn.GroupPooling(self.relu.out_type) # make invariant
+
+        # make normal first layers identity/disappear
+        self.backbone = backbone_network(weights=None)
+        self.backbone_output_dim = self.backbone.fc.in_features
+
+        self.backbone.conv1 = nn.Identity()
+        self.backbone.maxpool = nn.Identity()
+        self.backbone.fc = nn.Identity()
+
+        # projection head
+        self.projector = nn.Sequential(
+            nn.Linear(self.backbone_output_dim, projector_hidden_size), 
+            nn.ReLU(), 
+            nn.Linear(projector_hidden_size, n_classes),
+        )
+    
+    def forward(self, x):
+        # equivariant block
+        x = enn.GeometricTensor(x, self.in_type)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.gpool(x)
+        x = x.tensor
+        # # needed ?
+        # b, c, w, h = x.shape
+        # x = F.avg_pool2d(x, (w, h))
+        # x = x.view(x.size(0), -1)
+        # x = torch.flatten(x, 1)
+
+        # backbone and projector
+        h = self.backbone(x)
+        z = self.projector(h)
+        return h, z
