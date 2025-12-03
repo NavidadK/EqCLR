@@ -7,6 +7,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import Dataset, DataLoader
 
 import torchvision.transforms as transforms
+from torchvision.models import resnet18
 
 import numpy as np
 import time
@@ -16,8 +17,9 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
 
-from eqCLR.eq_resnet import EqResNet18
-from evaluation import model_eval
+from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18
+from eqCLR.test_resnet import Wide_ResNet
+from evaluation import model_eval, eval_knn_single, dataset_to_X_y
 
 ###################### PARAMS ##############################
 
@@ -32,8 +34,10 @@ PROJECTOR_OUTPUT_SIZE = 128
 CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
+EVAL_DURING_TRAIN = True
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_wo_rot_N8"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_N8_gaussian_blur_avg_instead_of_maxpool"
+print(f"Model filename: {MODEL_FILENAME}")
 
 ###################### DATA LOADER #########################
 
@@ -96,7 +100,9 @@ def infoNCE(features, temperature=0.5):
 
     return F.cross_entropy(cos_xx, targets)
 
-model = EqResNet18(N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+# model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+#model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
+model = EqResNet18(N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, gaussian_blur=True)
 
 optimizer = SGD(
     model.parameters(),
@@ -123,10 +129,13 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 
 print("Starting training.")
 
+# torch.cuda.set_device(1)   # physical GPU 1
+# device = torch.device("cuda:1")
 device = "cuda"
 
 model.to(device)
 model.train()
+knn_dict = {}
 training_start_time = time.time()
 
 for epoch in range(N_EPOCHS):
@@ -149,15 +158,25 @@ for epoch in range(N_EPOCHS):
         optimizer.step()
 
     end_time = time.time()
+
+    scheduler.step()
+
+    if EVAL_DURING_TRAIN:
+        with torch.no_grad():
+            X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
+            X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+
+            knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
+            knn_dict[epoch] = knn_acc
+
     if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
         print(
             f"Epoch {epoch + 1}, "
             f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
             f"{end_time - start_time:.1f} s",
+            f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
             flush=True
         )
-
-    scheduler.step()
 
 training_end_time = time.time()
 hours = (training_end_time - training_start_time) / 60 // 60
@@ -186,6 +205,8 @@ model_details = {
     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
     "Training augmentations": transforms_ssl,
     "Training time": training_end_time - training_start_time,
+    "Training time per epoch": average,
+    "KNN during training": knn_dict,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
@@ -223,3 +244,5 @@ eval_dict = model_eval(
 
 with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
     pickle.dump(eval_dict, f)
+
+print(f"Evaluation results saved to {MODEL_FILENAME}_eval.pkl")

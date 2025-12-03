@@ -16,7 +16,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
 import pickle
-from evaluation import model_eval
+from evaluation import model_eval, eval_knn_single, dataset_to_X_y
 
 ###################### PARAMS ##############################
 
@@ -32,9 +32,10 @@ PROJECTOR_HIDDEN_SIZE = 1024
 PROJECTOR_OUTPUT_SIZE = 128
 CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
-PRINT_EVERY_EPOCHS = 5
+PRINT_EVERY_EPOCHS = 1
+EVAL_DURING_TRAIN = True
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-{BACKBONE}_with_rotation.pt"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-{BACKBONE}_conv1s2_w_maxpool_with_rotation"
 
 ###################### DATA LOADER #########################
 
@@ -53,7 +54,7 @@ class RandomRightAngleRotation:
 transforms_ssl = transforms.Compose(
     [
         transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
-        # RandomRightAngleRotation(), # additional rotation
+        RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
@@ -92,10 +93,10 @@ class ResNetwithProjector(nn.Module):
         self.backbone = backbone_network(weights=None)
         self.backbone_output_dim = self.backbone.fc.in_features
         
-        self.backbone.conv1 = nn.Conv2d(
-            3, 64, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.backbone.maxpool = nn.Identity()
+        # self.backbone.conv1 = nn.Conv2d(
+        #     3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        # )
+        # self.backbone.maxpool = nn.Identity()
         self.backbone.fc = nn.Identity()
 
         self.projector = nn.Sequential(
@@ -159,6 +160,7 @@ device = "cuda"
 
 model.to(device)
 model.train()
+knn_dict = {}
 training_start_time = time.time()
 
 for epoch in range(N_EPOCHS):
@@ -180,15 +182,24 @@ for epoch in range(N_EPOCHS):
         optimizer.step()
 
     end_time = time.time()
+
+    scheduler.step()
+    if EVAL_DURING_TRAIN:
+        with torch.no_grad():
+            X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
+            X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+
+            knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
+            knn_dict[epoch] = knn_acc
+
     if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
         print(
             f"Epoch {epoch + 1}, "
             f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
             f"{end_time - start_time:.1f} s",
+            f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
             flush=True
         )
-
-    scheduler.step()
 
 training_end_time = time.time()
 hours = (training_end_time - training_start_time) / 60 // 60
@@ -216,6 +227,8 @@ model_details = {
     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
     "Training augmentations": transforms_ssl,
     "Training time": training_end_time - training_start_time,
+    "Training time per epoch": average,
+    "KNN during training": knn_dict,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
