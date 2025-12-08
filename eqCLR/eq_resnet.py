@@ -32,6 +32,18 @@ def conv3x3(in_type: enn.FieldType, out_type: enn.FieldType, stride=1, padding=1
                       frequencies_cutoff=lambda r: 3*r,
                       )
 
+def conv4x4(in_type: enn.FieldType, out_type: enn.FieldType, stride=2, padding=1,
+            dilation=1, bias=False):
+    """4x4 convolution with padding"""
+    return enn.R2Conv(in_type, out_type, 4,
+                      stride=stride,
+                      padding=padding,
+                      dilation=dilation,
+                      bias=bias,
+                      sigma=None,
+                      frequencies_cutoff=lambda r: 3*r,
+                      )
+
 def conv1x1(in_type: enn.FieldType, out_type: enn.FieldType, stride=1, padding=0,
             dilation=1, bias=False):
     """1x1 convolution with padding"""
@@ -47,11 +59,16 @@ def conv1x1(in_type: enn.FieldType, out_type: enn.FieldType, stride=1, padding=0
 class EqBasicBlock(enn.EquivariantModule):
     # expansion = 1
 
-    def __init__(self, in_type, out_type, stride=1, downsample=None):
+    def __init__(self, in_type, out_type, stride=1, downsample=None, eq_downsampling=None):
         super().__init__()
         self.in_type = in_type
         self.out_type = out_type
-        self.conv1 = conv3x3(in_type, out_type, stride=stride, padding=1)
+        self.eq_downsampling = eq_downsampling
+        
+        if eq_downsampling == "kernel_size":
+            self.conv1 = conv4x4(in_type, out_type, stride=stride, padding=1)
+        else:
+            self.conv1 = conv3x3(in_type, out_type, stride=stride, padding=1)
         self.bn1 = enn.InnerBatchNorm(self.conv1.out_type)
         self.relu = enn.ReLU(self.conv1.out_type)
         self.conv2 = conv3x3(self.conv1.out_type, out_type, stride=1, padding=1)
@@ -86,11 +103,21 @@ class EqBasicBlock(enn.EquivariantModule):
     
 
 class EqResNet18(nn.Module):
-    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool=True):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None):
         super().__init__()
         # Define the rotational and flip symmetry group
         self.r2_act = gspaces.rot2dOnR2(N)
         self.maxpool = maxpool
+        self.eq_downsampling = eq_downsampling
+        assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
+            f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
+
+        if eq_downsampling == "kernel_size":
+            kernel_s_conv1 = 8
+            kernel_s_maxpool = 4
+        else:
+            kernel_s_conv1 = 7
+            kernel_s_maxpool = 3
 
         # if N != 1:
         #     self.r2_act = gspaces.flipRot2dOnR2(N)
@@ -110,21 +137,26 @@ class EqResNet18(nn.Module):
         #self.conv1 = conv7x7(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
         if gaussian_blur:
             self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=2, padding=1), 
-                                              enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=1, padding=3))
+                                              enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=1, padding=3))
         else:
-            self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
+            self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=2, padding=3) # kernel_size=7
 
         self.bn1 = enn.InnerBatchNorm(self.feat64)
         self.relu = enn.ReLU(self.feat64)
         # maxpooling desctroys equivariance -> alternatives?
-        # self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=3, stride=2, padding=1)
-        self.maxpool = enn.PointwiseAvgPoolAntialiased2D(self.feat64, sigma=0.33, stride=2, padding=1)
+
+        if maxpool == 'max':
+            self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=kernel_s_maxpool, stride=2, padding=1) # kernel_size=3
+        elif maxpool == 'avg':
+            self.maxpool = enn.PointwiseAvgPoolAntialiased2D(self.feat64, sigma=0.33, stride=2, padding=1)
+        else:
+            self.maxpool = None
 
         # ResNet layers
-        self.layer1 = self._make_layer(self.relu.out_type, self.feat64, blocks=2, gaussian_blur=gaussian_blur)
-        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2, gaussian_blur=gaussian_blur)
-        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2, gaussian_blur=gaussian_blur)
-        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2, gaussian_blur=gaussian_blur)
+        self.layer1 = self._make_layer(self.relu.out_type, self.feat64, blocks=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
         
         # Pooling
         #self.pool = enn.PointwiseMaxPool2D(self.layer4.out_type, kernel_size=3, stride=1, padding=0)
@@ -140,7 +172,8 @@ class EqResNet18(nn.Module):
             nn.Linear(projector_hidden_size, n_classes),
         )
 
-    def _make_layer(self, in_type, out_type, blocks, stride=1, gaussian_blur=False):
+    def _make_layer(self, in_type, out_type, blocks, stride=1, gaussian_blur=False, eq_downsampling=None):
+        print('Make layer')
         layers = []
         downsample = None
 
@@ -151,7 +184,7 @@ class EqResNet18(nn.Module):
             else:
                 downsample = conv1x1(in_type, out_type, stride=stride, bias=False)
 
-        layers.append(EqBasicBlock(in_type, out_type, stride, downsample))
+        layers.append(EqBasicBlock(in_type, out_type, stride, downsample, eq_downsampling))
         for _ in range(1, blocks):
             layers.append(EqBasicBlock(out_type, out_type))
         
@@ -163,9 +196,8 @@ class EqResNet18(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        if self.maxpool:
+        if self.maxpool is not None:
             x = self.maxpool(x)
-        # x = enn.GeometricTensor(self.maxpool(x.tensor), x.type)
 
         x = self.layer1(x)
         x = self.layer2(x)
