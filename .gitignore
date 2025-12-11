@@ -4,3 +4,5 @@ __pycache__/
 results/
 .vscode/
 test.ipynb
+test.py
+eqCLR_pmnist_copy.py
