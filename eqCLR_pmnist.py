@@ -19,14 +19,14 @@ from medmnist import PathMNIST
 
 from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18
 from eqCLR.test_resnet import Wide_ResNet
-from evaluation import model_eval, eval_knn_single, dataset_to_X_y
+from evaluation import model_eval, eval_knn_single, dataset_to_X_y, lin_eval_rep
 
 ###################### PARAMS ##############################
 
 BATCH_SIZE = 512
 N_EPOCHS = 100 # 1000
 N_CPU_WORKERS = 16
-BASE_LR = 0.03         # important
+BASE_LR = 0.06         # 0.03
 WEIGHT_DECAY = 5e-4    # important
 MOMENTUM = 0.9
 PROJECTOR_HIDDEN_SIZE = 1024
@@ -35,16 +35,29 @@ CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
 EVAL_DURING_TRAIN = True
+IMG_RESIZE = 33
+MAXPOOL = 'max'  # 'avg' or 'max' or None
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet18_N8_gaussian_blur_avg_instead_of_maxpool"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_N8_img_resize33"
 print(f"Model filename: {MODEL_FILENAME}")
 
 ###################### DATA LOADER #########################
 
-pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transforms.ToTensor())
-pmnist_test = PathMNIST(split='test', download=False, size=28, root='data/pathmnist/', transform=transforms.ToTensor())
+if IMG_RESIZE is not None:
+    transform = transforms.Compose([
+        transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
+        transforms.ToTensor(),
+    ])
+else:
+    transform = transforms.ToTensor()
 
+pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transform)
+pmnist_test = PathMNIST(split='test', download=False, size=28, root='data/pathmnist/', transform=transform)
 print("Data loaded.")
+
+if IMG_RESIZE is None:
+    IMG_RESIZE = pmnist_train[0][0].shape[1]  # get image size from dataset
+print(f"Image size (resized): {IMG_RESIZE}")
 
 # additional rotation
 class RandomRightAngleRotation:
@@ -55,7 +68,8 @@ class RandomRightAngleRotation:
 
 transforms_ssl = transforms.Compose(
     [
-        transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
+        transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
+        transforms.RandomResizedCrop(size=IMG_RESIZE, scale=(CROP_LOW_SCALE, 1)),
         # RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
@@ -102,7 +116,7 @@ def infoNCE(features, temperature=0.5):
 
 # model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 #model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
-model = EqResNet18(N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, gaussian_blur=True)
+model = EqResNet18(N=8, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 
 optimizer = SGD(
     model.parameters(),
@@ -129,8 +143,6 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 
 print("Starting training.")
 
-# torch.cuda.set_device(1)   # physical GPU 1
-# device = torch.device("cuda:1")
 device = "cuda"
 
 model.to(device)
@@ -194,6 +206,7 @@ print(f"Model saved to {MODEL_FILENAME}_weights.pt")
 
 model_details = {
     "Filename": MODEL_FILENAME,
+    "Model structure": str(model),
     "N_EPOCHS": N_EPOCHS,
     "BATCH_SIZE": BATCH_SIZE,
     "BASE_LR": BASE_LR,
@@ -207,6 +220,7 @@ model_details = {
     "Training time": training_end_time - training_start_time,
     "Training time per epoch": average,
     "KNN during training": knn_dict,
+    "IMG_RESIZE": IMG_RESIZE,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
@@ -217,7 +231,7 @@ print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
 ###################### EVALUATION #########################
 transforms_classifier = transforms.Compose(
     [
-        transforms.RandomResizedCrop(size=32, scale=(CROP_LOW_SCALE, 1)),
+        transforms.RandomResizedCrop(size=IMG_RESIZE, scale=(CROP_LOW_SCALE, 1)),
         transforms.RandomHorizontalFlip(),
         RandomRightAngleRotation(), # additional rotation
         transforms.ToTensor(),
@@ -246,3 +260,30 @@ with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
     pickle.dump(eval_dict, f)
 
 print(f"Evaluation results saved to {MODEL_FILENAME}_eval.pkl")
+
+###################### ROTATION EVALUATION #########################
+from escnn.nn import EquivariantModule
+from rotation_eval import pred_consistency_90deg, check_equivariance_90deg
+
+EquivariantModule.check_equivariance_90deg = check_equivariance_90deg
+
+# Equivariance error per layer
+eq_errors = {}
+
+for name, module in model.named_modules():
+    if isinstance(module, EquivariantModule):
+        error = module.check_equivariance_90deg()
+        eq_errors[name] = error
+
+# Classification consistency under rotation
+consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test)
+
+rotations_eval = {
+    "Eq_errors": eq_errors,
+    "Pred_consistency": consistency,
+}
+
+with open(f'results/model_eval_rotations/{MODEL_FILENAME}_rotation_eval.pkl', 'wb') as f:
+    pickle.dump(rotations_eval, f)
+
+print(f"Evaluation results saved to {MODEL_FILENAME}_rotation_eval.pkl")
