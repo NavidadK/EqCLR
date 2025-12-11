@@ -8,6 +8,18 @@ from escnn import nn as enn
 
 from typing import Tuple
 
+def convkxk(k: int,in_type: enn.FieldType, out_type: enn.FieldType, stride=1, padding=1,
+            dilation=1, bias=False):
+    """3x3 convolution with padding"""
+    return enn.R2Conv(in_type, out_type, k,
+                      stride=stride,
+                      padding=padding,
+                      dilation=dilation,
+                      bias=bias,
+                      sigma=None,
+                      frequencies_cutoff=lambda r: 3*r,
+                      )
+
 def conv7x7(in_type: enn.FieldType, out_type: enn.FieldType, stride=2, padding=3,
             dilation=1, bias=False):
     """7x7 convolution with padding"""
@@ -65,7 +77,7 @@ class EqBasicBlock(enn.EquivariantModule):
         self.out_type = out_type
         self.eq_downsampling = eq_downsampling
         
-        if eq_downsampling == "kernel_size":
+        if stride != 1 and eq_downsampling == "kernel_size":
             self.conv1 = conv4x4(in_type, out_type, stride=stride, padding=1)
         else:
             self.conv1 = conv3x3(in_type, out_type, stride=stride, padding=1)
@@ -77,7 +89,6 @@ class EqBasicBlock(enn.EquivariantModule):
 
     def forward(self, x):
         identity = x
-
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -112,12 +123,16 @@ class EqResNet18(nn.Module):
         assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
             f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
 
-        if eq_downsampling == "kernel_size":
-            kernel_s_conv1 = 8
-            kernel_s_maxpool = 4
+        if maxpool is None:
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (4, 2, 1) if eq_downsampling == "kernel_size" else (3, 1, 1)
+            )
         else:
-            kernel_s_conv1 = 7
-            kernel_s_maxpool = 3
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (8, 3, 2) if eq_downsampling == "kernel_size" else (7, 3, 2)
+            )
+            kernel_s_maxpool = 4 if eq_downsampling == "kernel_size" else 3
+
 
         # if N != 1:
         #     self.r2_act = gspaces.flipRot2dOnR2(N)
@@ -136,10 +151,10 @@ class EqResNet18(nn.Module):
         # initial conv + BN + ReLU
         #self.conv1 = conv7x7(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
         if gaussian_blur:
-            self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=2, padding=1), 
+            self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=stride_s_conv1, padding=padding_s_conv1), 
                                               enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=1, padding=3))
         else:
-            self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=2, padding=3) # kernel_size=7
+            self.conv1 = enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=stride_s_conv1, padding=padding_s_conv1) # kernel_size=7
 
         self.bn1 = enn.InnerBatchNorm(self.feat64)
         self.relu = enn.ReLU(self.feat64)
@@ -176,13 +191,17 @@ class EqResNet18(nn.Module):
         print('Make layer')
         layers = []
         downsample = None
+        if eq_downsampling == 'kernel_size':
+            kernel_size = 4
+        else:
+            kernel_size = 1
 
         if stride != 1 or in_type != out_type:
             if gaussian_blur:
                 downsample = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(in_type, sigma=0.33, stride=stride, padding=1), 
                                                   conv1x1(in_type, out_type, stride=1, bias=False))
             else:
-                downsample = conv1x1(in_type, out_type, stride=stride, bias=False)
+                downsample = enn.R2Conv(in_type, out_type, kernel_size=kernel_size, stride=stride, padding=0, bias=False)# schauen, ob padding benötigt  # conv1x1(in_type, out_type, stride=stride, bias=False)
 
         layers.append(EqBasicBlock(in_type, out_type, stride, downsample, eq_downsampling))
         for _ in range(1, blocks):

@@ -32,6 +32,62 @@ def dataset_to_X_y(dataset, model, device=device):
 
     return X, y, Z
 
+import torch
+import numpy as np
+from torch.utils.data import DataLoader
+import torch.nn.functional as F
+
+# def dataset_to_X_y2(dataset, model, device=device):
+#     """
+#     Convert a dataset to feature vectors X, latent vectors Z, and labels y.
+#     Ensures that all input images are padded to a compatible size for the model
+#     so that stride-2 convs + even kernel sizes do not break residual blocks.
+#     """
+
+#     X = []
+#     y = []
+#     Z = []
+
+#     # Determine the required multiple of 2^N_stride2
+#     # For example, if your model has 4 stride-2 layers:
+#     stride_layers = 4
+#     multiple = 2 ** stride_layers  # 16 in this example
+
+#     for batch_idx, batch in enumerate(DataLoader(dataset, batch_size=1024, pin_memory=True)):
+#         images, labels = batch  # images: [B,C,H,W]
+
+#         B, C, H, W = images.shape
+
+#         # # Compute padding needed to make H/W multiple of 'multiple'
+#         # pad_h = (multiple - H % multiple) % multiple
+#         # pad_w = (multiple - W % multiple) % multiple
+
+#         # # Split padding equally on both sides
+#         # pad_top = pad_h // 2
+#         # pad_bottom = pad_h - pad_top
+#         # pad_left = pad_w // 2
+#         # pad_right = pad_w - pad_left
+
+#         # if pad_h > 0 or pad_w > 0:
+#         #     images = F.pad(images, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
+
+#         pad = 2
+#         images = F.pad(images, (pad, pad, pad, pad), mode='constant', value=0)
+
+#         # Forward pass
+#         h, z = model(images.to(device))
+
+#         X.append(h.cpu().numpy())
+#         Z.append(z.cpu().numpy())
+#         y.append(labels.cpu().numpy().ravel())
+
+#     X = np.vstack(X)
+#     Z = np.vstack(Z)
+#     y = np.hstack(y)
+
+#     return X, y, Z
+
+
 def eval_knn(X_train, y_train, X_test, y_test):
     eval_dict = {}
 
