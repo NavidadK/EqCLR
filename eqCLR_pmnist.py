@@ -17,7 +17,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
 
-from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18
+from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18, EqResNet18_SO2
 from eqCLR.test_resnet import Wide_ResNet
 from evaluation import model_eval, eval_knn_single, dataset_to_X_y, lin_eval_rep
 
@@ -35,10 +35,12 @@ CROP_LOW_SCALE = 0.2
 GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
 EVAL_DURING_TRAIN = True
-IMG_RESIZE = 33
+ITER_SAVE_EMBED = 50
+IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = 'max'  # 'avg' or 'max' or None
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_N8_img_resize33"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_N-1_resize33"
+
 print(f"Model filename: {MODEL_FILENAME}")
 
 ###################### DATA LOADER #########################
@@ -116,7 +118,8 @@ def infoNCE(features, temperature=0.5):
 
 # model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 #model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
-model = EqResNet18(N=8, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+# model = EqResNet18(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+model = EqResNet18_SO2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 
 optimizer = SGD(
     model.parameters(),
@@ -148,7 +151,9 @@ device = "cuda"
 model.to(device)
 model.train()
 knn_dict = {}
+embed_dict = {}
 training_start_time = time.time()
+time_train = 0.0
 
 for epoch in range(N_EPOCHS):
     epoch_loss = 0.0
@@ -170,16 +175,25 @@ for epoch in range(N_EPOCHS):
         optimizer.step()
 
     end_time = time.time()
+    time_train += end_time - start_time
 
     scheduler.step()
 
     if EVAL_DURING_TRAIN:
+        model.eval()
         with torch.no_grad():
             X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
             X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
 
             knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
             knn_dict[epoch] = knn_acc
+
+            if ITER_SAVE_EMBED is not None and (epoch + 1) % ITER_SAVE_EMBED == 0:
+                embed_dict[epoch] = {
+                    "X_test": X_test,
+                    "y_test": y_test,
+                }
+        model.train()
 
     if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
         print(
@@ -218,9 +232,11 @@ model_details = {
     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
     "Training augmentations": transforms_ssl,
     "Training time": training_end_time - training_start_time,
-    "Training time per epoch": average,
+    "Training time w/o evaluation": time_train,
+    "MAXPOOL": MAXPOOL,
     "KNN during training": knn_dict,
     "IMG_RESIZE": IMG_RESIZE,
+    "Embeddings during training": embed_dict,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
@@ -228,9 +244,17 @@ with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
     
 print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
 
+# #### Load weights (optional) ####
+# device = "cuda"
+# model.to(device)
+# model.load_state_dict(torch.load(f'results/model_weights/6253-path_mnist-eqCLR_N8_resize33_with_maxpool_frac0.6_weights.pt', weights_only=True))
+# print('Weights loaded.')
+# model.eval()
+
 ###################### EVALUATION #########################
 transforms_classifier = transforms.Compose(
     [
+        transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
         transforms.RandomResizedCrop(size=IMG_RESIZE, scale=(CROP_LOW_SCALE, 1)),
         transforms.RandomHorizontalFlip(),
         RandomRightAngleRotation(), # additional rotation
@@ -267,12 +291,33 @@ from rotation_eval import pred_consistency_90deg, check_equivariance_90deg
 
 EquivariantModule.check_equivariance_90deg = check_equivariance_90deg
 
+input_sizes = {}
+
+def hook_fn(name):
+    def hook(module, inp, out):
+        # Store input shape of this layer
+        input_sizes[name] = tuple(inp[0].shape)
+    return hook
+
+hooks = []
+for name, module in model.named_modules():
+    hooks.append(module.register_forward_hook(hook_fn(name)))
+
+x = torch.randn(1, 3, 33, 33).to(device) 
+
+with torch.no_grad():
+    model(x)
+
+for h in hooks:
+    h.remove()
+
 # Equivariance error per layer
 eq_errors = {}
 
 for name, module in model.named_modules():
     if isinstance(module, EquivariantModule):
-        error = module.check_equivariance_90deg()
+        size = input_sizes.get(name)[-1]
+        error = module.check_equivariance_90deg(x_size=size)
         eq_errors[name] = error
 
 # Classification consistency under rotation
