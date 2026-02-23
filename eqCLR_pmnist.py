@@ -17,7 +17,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
 
-from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18, EqResNet18_SO2
+from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18, EqResNet18_SO2, EqResNet18_v2, EqResNet, eq_resnet
 from eqCLR.test_resnet import Wide_ResNet
 from evaluation import model_eval, eval_knn_single, dataset_to_X_y, lin_eval_rep
 
@@ -38,8 +38,10 @@ EVAL_DURING_TRAIN = True
 ITER_SAVE_EMBED = 50
 IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = 'max'  # 'avg' or 'max' or None
+N_grid = 16  # for steerable CNN
+IRREPS_L = 12  # for steerable CNN
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_N-1_resize33"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet34_keepdim_resize33"
 
 print(f"Model filename: {MODEL_FILENAME}")
 
@@ -119,7 +121,9 @@ def infoNCE(features, temperature=0.5):
 # model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 #model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
 # model = EqResNet18(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
-model = EqResNet18_SO2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+# model = EqResNet18_SO2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+# model = EqResNet18_v2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, N_grid=N_grid, irreps_L=IRREPS_L, S=1)
+model = EqResNet(N=4, layers=[3,4,6,3], block='basic', keep_dim=True)
 
 optimizer = SGD(
     model.parameters(),
@@ -237,6 +241,7 @@ model_details = {
     "KNN during training": knn_dict,
     "IMG_RESIZE": IMG_RESIZE,
     "Embeddings during training": embed_dict,
+    "N_grid": N_grid,
 }
 
 with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
@@ -277,7 +282,6 @@ eval_dict = model_eval(
     pmnist_test,
     pmnist_loader_classifier,
     n_classes=9,
-    dim_represenations=512,
 )
 
 with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
@@ -321,7 +325,7 @@ for name, module in model.named_modules():
         eq_errors[name] = error
 
 # Classification consistency under rotation
-consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test)
+consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test, n_classes=9)
 
 rotations_eval = {
     "Eq_errors": eq_errors,
