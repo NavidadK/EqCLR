@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.datasets import CIFAR10
 from torchvision.models import resnet18, resnet34, resnet50
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
 
 import numpy as np
 import time
@@ -20,7 +21,7 @@ from evaluation import model_eval, eval_knn_single, dataset_to_X_y
 
 ###################### PARAMS ##############################
 
-BACKBONE = "resnet50"
+BACKBONE = "resnet18"
 
 BATCH_SIZE = 512
 N_EPOCHS = 100 # 1000
@@ -38,8 +39,8 @@ ITER_SAVE_EMBED = 50
 IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = True
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-{BACKBONE}_resize_33_default"
-
+# MODEL_FILENAME = f"{np.random.randint(10000):04}-{BACKBONE}_resize_33_4xrotations"
+MODEL_FILENAME = f"8674-{BACKBONE}_resize_33_4xrotations"
 ###################### DATA LOADER #########################
 
 if IMG_RESIZE is not None:
@@ -123,10 +124,16 @@ class ResNetwithProjector(nn.Module):
         )
 
     def forward(self, x):
-        h = self.backbone(x)
-        z = self.projector(h)
-        return h, z
+        angles = [0, 90, 180, 270]
+        hs = [] 
+        for angle in angles:
+            x_rot = TF.rotate(x, angle, expand=False)
+            h = self.backbone(x_rot)
+            hs.append(h)
 
+        h_avg = torch.stack(hs, dim=0).mean(dim=0)
+        z = self.projector(h_avg)
+        return h_avg, z
 
 def infoNCE(features, temperature=0.5):
     x = F.normalize(features)
@@ -176,102 +183,102 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 device = "cuda"
 model.to(device)
 
-model.train()
-knn_dict = {}
-embed_dict = {}
-training_start_time = time.time()
-time_train = 0.0
+# model.train()
+# knn_dict = {}
+# embed_dict = {}
+# training_start_time = time.time()
+# time_train = 0.0
 
-for epoch in range(N_EPOCHS):
-    epoch_loss = 0.0
-    start_time = time.time()
+# for epoch in range(N_EPOCHS):
+#     epoch_loss = 0.0
+#     start_time = time.time()
 
-    for batch_idx, batch in enumerate(pmnist_loader_ssl):
-        views, _ = batch
-        views = [view.to(device, non_blocking=True) for view in views]
+#     for batch_idx, batch in enumerate(pmnist_loader_ssl):
+#         views, _ = batch
+#         views = [view.to(device, non_blocking=True) for view in views]
 
-        optimizer.zero_grad()
+#         optimizer.zero_grad()
 
-        _, z1 = model(views[0])
-        _, z2 = model(views[1])
-        loss = infoNCE(torch.cat((z1, z2)))
-        epoch_loss += loss.item()
+#         _, z1 = model(views[0])
+#         _, z2 = model(views[1])
+#         loss = infoNCE(torch.cat((z1, z2)))
+#         epoch_loss += loss.item()
 
-        loss.backward()
-        optimizer.step()
+#         loss.backward()
+#         optimizer.step()
 
-    end_time = time.time()
-    time_train += end_time - start_time
+#     end_time = time.time()
+#     time_train += end_time - start_time
 
-    scheduler.step()
-    if EVAL_DURING_TRAIN:
-        model.eval()
-        with torch.no_grad():
-            X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
-            X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+#     scheduler.step()
+#     if EVAL_DURING_TRAIN:
+#         model.eval()
+#         with torch.no_grad():
+#             X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
+#             X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
 
-            knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
-            knn_dict[epoch] = knn_acc
+#             knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
+#             knn_dict[epoch] = knn_acc
 
-            if ITER_SAVE_EMBED is not None and (epoch + 1) % ITER_SAVE_EMBED == 0:
-                embed_dict[epoch] = {
-                    "X_test": X_test,
-                    "y_test": y_test,
-                }
-        model.train()
+#             if ITER_SAVE_EMBED is not None and (epoch + 1) % ITER_SAVE_EMBED == 0:
+#                 embed_dict[epoch] = {
+#                     "X_test": X_test,
+#                     "y_test": y_test,
+#                 }
+#         model.train()
 
-    if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
-        print(
-            f"Epoch {epoch + 1}, "
-            f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
-            f"{end_time - start_time:.1f} s",
-            f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
-            flush=True
-        )
+#     if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
+#         print(
+#             f"Epoch {epoch + 1}, "
+#             f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
+#             f"{end_time - start_time:.1f} s",
+#             f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
+#             flush=True
+#         )
 
-training_end_time = time.time()
-hours = (training_end_time - training_start_time) / 60 // 60
-minutes = (training_end_time - training_start_time) / 60 % 60
-average = (training_end_time - training_start_time) / N_EPOCHS
-print(
-    f"Total training length for {N_EPOCHS} epochs: {hours:.0f}h {minutes:.0f}min",
-    f"({average:.1f} sec/epoch)",
-    flush=True
-)
+# training_end_time = time.time()
+# hours = (training_end_time - training_start_time) / 60 // 60
+# minutes = (training_end_time - training_start_time) / 60 % 60
+# average = (training_end_time - training_start_time) / N_EPOCHS
+# print(
+#     f"Total training length for {N_EPOCHS} epochs: {hours:.0f}h {minutes:.0f}min",
+#     f"({average:.1f} sec/epoch)",
+#     flush=True
+# )
 
-torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_weights.pt')
-print(f"Model saved to {MODEL_FILENAME}_weights.pt")
+# torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_weights.pt')
+# print(f"Model saved to {MODEL_FILENAME}_weights.pt")
 
-model_details = {
-    "Filename": MODEL_FILENAME,
-    "Model": str(model),
-    "N_EPOCHS": N_EPOCHS,
-    "BATCH_SIZE": BATCH_SIZE,
-    "BASE_LR": BASE_LR,
-    "WEIGHT_DECAY": WEIGHT_DECAY,
-    "MOMENTUM": MOMENTUM,
-    "CROP_LOW_SCALE": CROP_LOW_SCALE,
-    "GRAYSCALE_PROB": GRAYSCALE_PROB,
-    "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
-    "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
-    "Training augmentations": transforms_ssl,
-    "Training time": training_end_time - training_start_time,
-    "Training time w/o evaluation": time_train,
-    "KNN during training": knn_dict,
-    "Image resize": IMG_RESIZE,
-    "Embeddings during training": embed_dict,
-}
+# model_details = {
+#     "Filename": MODEL_FILENAME,
+#     "Model": str(model),
+#     "N_EPOCHS": N_EPOCHS,
+#     "BATCH_SIZE": BATCH_SIZE,
+#     "BASE_LR": BASE_LR,
+#     "WEIGHT_DECAY": WEIGHT_DECAY,
+#     "MOMENTUM": MOMENTUM,
+#     "CROP_LOW_SCALE": CROP_LOW_SCALE,
+#     "GRAYSCALE_PROB": GRAYSCALE_PROB,
+#     "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
+#     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
+#     "Training augmentations": transforms_ssl,
+#     "Training time": training_end_time - training_start_time,
+#     "Training time w/o evaluation": time_train,
+#     "KNN during training": knn_dict,
+#     "Image resize": IMG_RESIZE,
+#     "Embeddings during training": embed_dict,
+# }
 
-with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
-    pickle.dump(model_details, f)
+# with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
+#     pickle.dump(model_details, f)
     
-print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
+# print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
 
 ###################### EVALUATION #########################
 
 # # load weights
-# model.load_state_dict(torch.load(f'results/model_weights/1982-path_mnist-resnet18_with_maxpool_1000epochs_weights.pt', weights_only=True))
-# print('Weights loaded.')
+model.load_state_dict(torch.load(f'results/model_weights/8674-resnet18_resize_33_4xrotations_weights.pt', weights_only=True))
+print('Weights loaded.')
 
 model.eval()
 
@@ -294,15 +301,15 @@ pmnist_loader_classifier = DataLoader(
     num_workers=N_CPU_WORKERS,
 )
 
-eval_dict = model_eval(
-    model,
-    pmnist_train,
-    pmnist_test,
-    pmnist_loader_classifier,
-    n_classes=9)
+# eval_dict = model_eval(
+#     model,
+#     pmnist_train,
+#     pmnist_test,
+#     pmnist_loader_classifier,
+#     n_classes=9)
 
-with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
-    pickle.dump(eval_dict, f)
+# with open(f'results/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
+#     pickle.dump(eval_dict, f)
 
 ###################### ROTATION EVALUATION #########################
 from rotation_eval import pred_consistency_90deg, check_equivariance_torch

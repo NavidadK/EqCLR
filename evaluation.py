@@ -126,14 +126,14 @@ def eval_logreg(X_train, y_train, X_test, y_test):
 
     return log_reg, lin_acc
 
-def lin_eval_rep(X_train, y_train, X_test, y_test, n_epochs=100, adam_lr=0.01, device=device, return_model=False):
+def lin_eval_rep(X_train, y_train, X_test, y_test, n_classes, n_epochs=100, adam_lr=0.01, device=device, return_model=False):
 
     X_train = torch.tensor(X_train, device=device)
     X_test = torch.tensor(X_test, device=device)
     y_train = torch.tensor(y_train, device=device)
     y_test = torch.tensor(y_test, device=device)
 
-    classifier = nn.Linear(X_train.shape[1], 10)
+    classifier = nn.Linear(X_train.shape[1], n_classes)
     classifier.to(device)
     classifier.train()
 
@@ -245,7 +245,7 @@ def lin_eval_aug(test_data, loader_classifier, model, n_classes, dim_represenati
         return acc
 
 
-def model_eval(model, data_train, data_test, loader_classifier, n_classes, dim_represenations):
+def model_eval(model, data_train, data_test, loader_classifier, n_classes, eval_aug=True):
 
     with torch.no_grad():
         X_train, y_train, Z_train = dataset_to_X_y(data_train, model)
@@ -263,12 +263,13 @@ def model_eval(model, data_train, data_test, loader_classifier, n_classes, dim_r
 
     # Linear Evaluation with precomputed representations
     print('------------------ Linear Evaluation with precomputed representations ------------------')
-    lin_acc_rep = lin_eval_rep(X_train, y_train, X_test, y_test)
+    lin_acc_rep = lin_eval_rep(X_train, y_train, X_test, y_test, n_classes)
     eval_dict["linear_accuracy_rep"] = lin_acc_rep
 
     # Linear Evaluation with augmentations
-    print('------------------ Linear Evaluation with augmentations ------------------')
-    lin_acc_aug = lin_eval_aug(data_test, loader_classifier, model, n_classes, dim_represenations)
-    eval_dict["linear_accuracy_aug"] = lin_acc_aug
+    if eval_aug:
+        print('------------------ Linear Evaluation with augmentations ------------------')
+        lin_acc_aug = lin_eval_aug(data_test, loader_classifier, model, n_classes, dim_represenations=X_train.shape[1])
+        eval_dict["linear_accuracy_aug"] = lin_acc_aug
 
     return eval_dict

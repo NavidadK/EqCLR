@@ -26,7 +26,7 @@ BACKBONE = "resnet18"
 BATCH_SIZE = 512
 N_EPOCHS = 100 # 1000
 N_CPU_WORKERS = 16
-BASE_LR = 0.03         # important (0.03)
+BASE_LR = 0.06         # important (0.03)
 WEIGHT_DECAY = 5e-4    # important
 MOMENTUM = 0.9
 PROJECTOR_HIDDEN_SIZE = 1024
@@ -36,10 +36,10 @@ GRAYSCALE_PROB = 0.1   # important
 PRINT_EVERY_EPOCHS = 1
 EVAL_DURING_TRAIN = False
 ITER_SAVE_EMBED = None
-IMG_RESIZE = None  # if None, use original size 28x28
+IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = True
 
-MODEL_FILENAME = f"2105-path_mnist-{BACKBONE}_with_maxpool_lr03"
+MODEL_FILENAME = f"2113-path_mnist-{BACKBONE}"
 
 ###################### DATA LOADER #########################
 
@@ -97,7 +97,7 @@ def make_subset(dataset, fraction, seed=0):
 
     return Subset(dataset, indices)
 
-fractions = [0.4, 0.2]
+fractions = [0.6, 0.8]
 
 for frac in fractions:
     print(f"\n--- Training with fraction {frac} of the data ---\n")
@@ -284,8 +284,8 @@ for frac in fractions:
 
     ###################### EVALUATION #########################
 
-    # # load weights
-    # model.load_state_dict(torch.load(f'results/model_weights/1982-path_mnist-resnet18_with_maxpool_1000epochs_weights.pt', weights_only=True))
+    # # # load weights
+    # model.load_state_dict(torch.load(f'results/model_weights/2109-path_mnist-resnet18_frac0.4_weights.pt', weights_only=True))
     # print('Weights loaded.')
 
     model.eval()
@@ -315,7 +315,7 @@ for frac in fractions:
         pmnist_test,
         pmnist_loader_classifier,
         n_classes=9,
-        dim_represenations=512,
+        eval_aug=False
     )
 
     with open(f'results/model_eval/{MODEL_FILENAME}_frac{frac}_eval.pkl', 'wb') as f:
@@ -355,7 +355,7 @@ for frac in fractions:
             eq_errors[name] = error
 
     # Classification consistency under rotation
-    consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test)
+    consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test, n_classes=9)
 
     rotations_eval = {
         "Eq_errors": eq_errors,

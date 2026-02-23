@@ -40,7 +40,7 @@ ITER_SAVE_EMBED = None
 IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = 'max'  # 'avg' or 'max' or None
 
-MODEL_FILENAME = f"6254-path_mnist-eqCLR_N8_resize33_with_maxpool_lr06"
+MODEL_FILENAME = f"7400-path_mnist-eqCLR_resize33_keepdim"
 print(f"Model filename: {MODEL_FILENAME}")
 
 ###################### DATA LOADER #########################
@@ -99,7 +99,7 @@ def make_subset(dataset, fraction, seed=0):
 
     return Subset(dataset, indices)
 
-fractions = [1.0, 0.6, 0.4, 0.2]
+fractions = [0.2]
 
 for frac in fractions:
     print(f"\n--- Training with fraction {frac} of the data ---")
@@ -134,7 +134,7 @@ for frac in fractions:
 
     # model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
     #model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
-    model = EqResNet18(N=8, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+    model = EqResNet18(N=4, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, keep_dim=True)
 
     optimizer = SGD(
         model.parameters(),
@@ -164,98 +164,105 @@ for frac in fractions:
     device = "cuda"
 
     model.to(device)
-    model.train()
-    knn_dict = {}
-    embed_dict = {}
-    training_start_time = time.time()
+    # model.train()
+    # knn_dict = {}
+    # embed_dict = {}
+    # training_start_time = time.time()
 
-    for epoch in range(N_EPOCHS):
-        epoch_loss = 0.0
-        start_time = time.time()
+    # for epoch in range(N_EPOCHS):
+    #     epoch_loss = 0.0
+    #     start_time = time.time()
 
-        for batch_idx, batch in enumerate(pmnist_loader_ssl):
-            views, _ = batch
+    #     for batch_idx, batch in enumerate(pmnist_loader_ssl):
+    #         views, _ = batch
 
-            views = [view.to(device, non_blocking=True) for view in views]
+    #         views = [view.to(device, non_blocking=True) for view in views]
 
-            optimizer.zero_grad()
+    #         optimizer.zero_grad()
 
-            _, z1 = model(views[0])
-            _, z2 = model(views[1])
-            loss = infoNCE(torch.cat((z1, z2)))
-            epoch_loss += loss.item()
+    #         _, z1 = model(views[0])
+    #         _, z2 = model(views[1])
+    #         loss = infoNCE(torch.cat((z1, z2)))
+    #         epoch_loss += loss.item()
 
-            loss.backward()
-            optimizer.step()
+    #         loss.backward()
+    #         optimizer.step()
 
-        end_time = time.time()
+    #     end_time = time.time()
 
-        scheduler.step()
+    #     scheduler.step()
 
-        if EVAL_DURING_TRAIN:
-            model.eval()
-            with torch.no_grad():
-                X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
-                X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+    #     if EVAL_DURING_TRAIN:
+    #         model.eval()
+    #         with torch.no_grad():
+    #             X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
+    #             X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
 
-                knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
-                knn_dict[epoch] = knn_acc
+    #             knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
+    #             knn_dict[epoch] = knn_acc
 
-                if ITER_SAVE_EMBED is not None and (epoch + 1) % ITER_SAVE_EMBED == 0:
-                    embed_dict[epoch] = {
-                        "X_test": X_test,
-                        "y_test": y_test,
-                    }
-            model.train()
+    #             if ITER_SAVE_EMBED is not None and (epoch + 1) % ITER_SAVE_EMBED == 0:
+    #                 embed_dict[epoch] = {
+    #                     "X_test": X_test,
+    #                     "y_test": y_test,
+    #                 }
+    #         model.train()
 
-        if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
-            print(
-                f"Epoch {epoch + 1}, "
-                f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
-                f"{end_time - start_time:.1f} s",
-                f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
-                flush=True
-            )
+    #     if (epoch + 1) % PRINT_EVERY_EPOCHS == 0:
+    #         print(
+    #             f"Epoch {epoch + 1}, "
+    #             f"average loss {epoch_loss / len(pmnist_loader_ssl):.4f}, "
+    #             f"{end_time - start_time:.1f} s",
+    #             f"KNN accuracy {knn_dict.get(epoch, 'N/A')}",
+    #             flush=True
+    #         )
 
-    training_end_time = time.time()
-    hours = (training_end_time - training_start_time) / 60 // 60
-    minutes = (training_end_time - training_start_time) / 60 % 60
-    average = (training_end_time - training_start_time) / N_EPOCHS
-    print(
-        f"Total training length for {N_EPOCHS} epochs: {hours:.0f}h {minutes:.0f}min",
-        f"({average:.1f} sec/epoch)",
-        flush=True
-    )
+    # training_end_time = time.time()
+    # hours = (training_end_time - training_start_time) / 60 // 60
+    # minutes = (training_end_time - training_start_time) / 60 % 60
+    # average = (training_end_time - training_start_time) / N_EPOCHS
+    # print(
+    #     f"Total training length for {N_EPOCHS} epochs: {hours:.0f}h {minutes:.0f}min",
+    #     f"({average:.1f} sec/epoch)",
+    #     flush=True
+    # )
 
-    model.eval()
-    torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_frac{frac}_weights.pt')
-    print(f"Model saved to {MODEL_FILENAME}_frac{frac}_weights.pt")
+    # model.eval()
+    # torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_frac{frac}_weights.pt')
+    # print(f"Model saved to {MODEL_FILENAME}_frac{frac}_weights.pt")
 
-    model_details = {
-        "Filename": MODEL_FILENAME,
-        "Model structure": str(model),
-        "N_EPOCHS": N_EPOCHS,
-        "BATCH_SIZE": BATCH_SIZE,
-        "BASE_LR": BASE_LR,
-        "WEIGHT_DECAY": WEIGHT_DECAY,
-        "MOMENTUM": MOMENTUM,
-        "CROP_LOW_SCALE": CROP_LOW_SCALE,
-        "GRAYSCALE_PROB": GRAYSCALE_PROB,
-        "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
-        "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
-        "Training augmentations": transforms_ssl,
-        "Training time": training_end_time - training_start_time,
-        "Training time per epoch": average,
-        "MAXPOOL": MAXPOOL,
-        "KNN during training": knn_dict,
-        "IMG_RESIZE": IMG_RESIZE,
-        "Embeddings during training": embed_dict,
-    }
+    # model_details = {
+    #     "Filename": MODEL_FILENAME,
+    #     "Model structure": str(model),
+    #     "N_EPOCHS": N_EPOCHS,
+    #     "BATCH_SIZE": BATCH_SIZE,
+    #     "BASE_LR": BASE_LR,
+    #     "WEIGHT_DECAY": WEIGHT_DECAY,
+    #     "MOMENTUM": MOMENTUM,
+    #     "CROP_LOW_SCALE": CROP_LOW_SCALE,
+    #     "GRAYSCALE_PROB": GRAYSCALE_PROB,
+    #     "PROJECTOR_HIDDEN_SIZE": PROJECTOR_HIDDEN_SIZE,
+    #     "PROJECTOR_OUTPUT_SIZE": PROJECTOR_OUTPUT_SIZE,
+    #     "Training augmentations": transforms_ssl,
+    #     "Training time": training_end_time - training_start_time,
+    #     "Training time per epoch": average,
+    #     "MAXPOOL": MAXPOOL,
+    #     "KNN during training": knn_dict,
+    #     "IMG_RESIZE": IMG_RESIZE,
+    #     "Embeddings during training": embed_dict,
+    # }
 
-    with open(f'results/model_details/{MODEL_FILENAME}_frac{frac}_details.pkl', 'wb') as f:
-        pickle.dump(model_details, f)
+    # with open(f'results/model_details/{MODEL_FILENAME}_frac{frac}_details.pkl', 'wb') as f:
+    #     pickle.dump(model_details, f)
         
-    print(f"Model details saved to {MODEL_FILENAME}_frac{frac}_details.pkl")
+    # print(f"Model details saved to {MODEL_FILENAME}_frac{frac}_details.pkl")
+
+    # load weights
+    model.load_state_dict(torch.load(f'results/model_weights/7400-path_mnist-eqCLR_resize33_keepdim_frac0.2_weights.pt', weights_only=True))
+    model.to(device)
+    model.eval()
+    print('Weights loaded.')
+
 
     ###################### EVALUATION #########################
     transforms_classifier = transforms.Compose(
@@ -283,7 +290,6 @@ for frac in fractions:
         pmnist_test,
         pmnist_loader_classifier,
         n_classes=9,
-        dim_represenations=512,
     )
 
     with open(f'results/model_eval/{MODEL_FILENAME}_frac{frac}_eval.pkl', 'wb') as f:
@@ -327,7 +333,7 @@ for frac in fractions:
             eq_errors[name] = error
 
     # Classification consistency under rotation
-    consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test)
+    consistency = pred_consistency_90deg(model, pmnist_train, pmnist_test, n_classes=9)
 
     rotations_eval = {
         "Eq_errors": eq_errors,

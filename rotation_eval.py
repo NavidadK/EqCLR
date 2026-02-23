@@ -23,7 +23,7 @@ def get_module_device(module):
 
 ############ Equivariance checks ############
 
-def check_equivariance_90deg(self, atol: float = 1e-7, rtol: float = 1e-5, x='odd'):
+def check_equivariance_90deg(self, atol: float = 1e-7, rtol: float = 1e-5, x_size=11):
     """
     Check equivariance for 90-degree rotations.
     Automatically uses the same device as the module.
@@ -33,12 +33,8 @@ def check_equivariance_90deg(self, atol: float = 1e-7, rtol: float = 1e-5, x='od
 
     # Input tensor
     c = self.in_type.size
-    if x == 'odd':
-        a = 11
-    elif x == 'even':
-        a = 10
     
-    x = torch.randn(3, c, *[a]*self.in_type.gspace.dimensionality, device=device) # random input
+    x = torch.randn(3, c, *[x_size]*self.in_type.gspace.dimensionality, device=device) # random input
     x = GeometricTensor(x, self.in_type)
 
     errors = {}
@@ -122,14 +118,14 @@ def rotate_90(x, angle):
         raise ValueError("Angle must be 0, 90, 180, or 270")
 
 
-def pred_consistency_90deg(model, data_train, data_test):
+def pred_consistency_90deg(model, data_train, data_test, n_classes):
 
     ########### classifier #################
     with torch.no_grad():
             X_train, y_train, Z_train = dataset_to_X_y(data_train, model)
             X_test, y_test, Z_test = dataset_to_X_y(data_test, model)
 
-    acc, classifier = lin_eval_rep(X_train, y_train, X_test, y_test, n_epochs=10, return_model=True)
+    acc, classifier = lin_eval_rep(X_train, y_train, X_test, y_test, n_classes=n_classes, n_epochs=10, return_model=True)
 
     ########### rotation consistency #################
 
