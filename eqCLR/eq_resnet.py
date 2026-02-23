@@ -3,6 +3,7 @@ from torch import nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import BasicBlock, Bottleneck
 import math
+import numpy as np
 
 from escnn import gspaces
 from escnn import nn as enn
@@ -206,7 +207,7 @@ class EqBootleneck(enn.EquivariantModule):
         self.conv1 = conv1x1(in_type, out_type)
         self.bn1 = enn.InnerBatchNorm(self.conv1.out_type)
         self.relu1 = enn.ReLU(self.conv1.out_type)
-        self.conv2 = conv3x3(self.conv1.out_type, out_type, stride=stride, padding=0)
+        self.conv2 = conv3x3(self.conv1.out_type, out_type, stride=stride, padding=1)
         self.bn2 = enn.InnerBatchNorm(self.conv2.out_type)
         self.relu2 = enn.ReLU(self.conv2.out_type)
         self.conv3 = conv1x1(self.conv2.out_type, out_type)
@@ -250,7 +251,7 @@ def eq_resnet(depth, **kwargs):
     return EqResNet(layers=layers, **kwargs)
 
 class EqResNet(nn.Module):
-    def __init__(self, N=4, layers=[2, 2, 2, 2], block='basic', projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, keep_dim=False):
+    def __init__(self, N=4, layers=[2, 2, 2, 2], block='basic', projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None):
         super().__init__()
         # Define the rotational and flip symmetry group
         self.r2_act = gspaces.rot2dOnR2(N)
@@ -264,11 +265,12 @@ class EqResNet(nn.Module):
         assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
             f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
 
-        if keep_dim:
+        if adjust_channels == 'keep_channels':
             self.S = self.r2_act.fibergroup.order()
+        elif adjust_channels == 'keep_param':
+            self.S = np.sqrt(self.r2_act.fibergroup.order())
         else:
             self.S = 1
-
         if maxpool is None:
             kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
                 (4, 2, 1) if eq_downsampling == "kernel_size" else (3, 1, 1)
@@ -325,7 +327,6 @@ class EqResNet(nn.Module):
 
         # Fully connected
         c = self.gpool.out_type.size
-        print('Final feature dimension:', c)
         
         #self.fully_net =  torch.nn.Linear(c, n_classes)
         
@@ -391,7 +392,7 @@ class EqResNet(nn.Module):
         return hidden, z
 
 class EqResNet18(nn.Module):
-    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, keep_dim=False):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None):
         super().__init__()
         # Define the rotational and flip symmetry group
         self.r2_act = gspaces.rot2dOnR2(N)
@@ -400,10 +401,13 @@ class EqResNet18(nn.Module):
         assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
             f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
 
-        if keep_dim:
+        if adjust_channels == 'keep_param':
+            self.S = np.sqrt(self.r2_act.fibergroup.order())
+        elif adjust_channels == 'keep_channels':
             self.S = self.r2_act.fibergroup.order()
         else:
             self.S = 1
+        print(f'S = {self.S}')
 
         if maxpool is None:
             kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
