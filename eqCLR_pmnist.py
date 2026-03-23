@@ -120,10 +120,10 @@ def infoNCE(features, temperature=0.5):
 
 # model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 #model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
-# model = EqResNet18(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
+model = EqResNet18(N=4, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, adjust_channels='keep_param')
 # model = EqResNet18_SO2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
 # model = EqResNet18_v2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, N_grid=N_grid, irreps_L=IRREPS_L, S=1)
-model = EqResNet(N=4, layers=[3,4,6,3], block='basic', keep_dim=True)
+# model = EqResNet(N=4, layers=[3,4,6,3], block='basic', keep_dim=True)
 
 optimizer = SGD(
     model.parameters(),

@@ -2,7 +2,9 @@ simclr-cifar10/
 data/
 __pycache__/
 results/
+results_rs/
 .vscode/
 test.ipynb
 test.py
+teest.ipynb
 eqCLR_pmnist_copy.py
