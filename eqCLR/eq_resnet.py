@@ -392,10 +392,11 @@ class EqResNet(nn.Module):
         return hidden, z
 
 class EqResNet18(nn.Module):
-    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None):
+    def __init__(self, N=4, r2_act = None, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None):
         super().__init__()
         # Define the rotational and flip symmetry group
-        self.r2_act = gspaces.rot2dOnR2(N)
+        self.r2_act = r2_act if r2_act is not None else gspaces.rot2dOnR2(N)
+
         self.maxpool = maxpool
         self.eq_downsampling = eq_downsampling
         assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
@@ -520,6 +521,282 @@ class EqResNet18(nn.Module):
 
         hidden = self.gpool(x).tensor.squeeze(-2).squeeze(-1)
 
+        # x = x.tensor
+        # b, c, w, h = x.shape
+        # hidden = F.avg_pool2d(x, (w, h))
+        # hidden = hidden.view(hidden.size(0), -1)
+        # hidden = torch.flatten(hidden, 1)
+        
+        z = self.fully_net(hidden)
+
+        return hidden, z
+
+class EqResNet18_hue(nn.Module):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None, gpool_mode='max'):
+        super().__init__()
+        # Define the rotational and flip symmetry group
+        self.r2_act = gspaces.hueOnR2(N)
+
+        self.maxpool = maxpool
+        self.eq_downsampling = eq_downsampling
+        assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
+            f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
+
+        if adjust_channels == 'keep_param':
+            self.S = np.sqrt(self.r2_act.fibergroup.order())
+        elif adjust_channels == 'keep_channels':
+            self.S = self.r2_act.fibergroup.order()
+        else:
+            self.S = 1
+        print(f'S = {self.S}')
+
+        if maxpool is None:
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (4, 2, 1) if eq_downsampling == "kernel_size" else (3, 1, 1)
+            )
+        else:
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (8, 3, 2) if eq_downsampling == "kernel_size" else (7, 3, 2)
+            )
+            kernel_s_maxpool = 4 if eq_downsampling == "kernel_size" else 3
+
+        self.gpool_mode = gpool_mode
+        self.encoder = enn.HSVHuePhaseEncoder(self.r2_act)
+
+        # input type: 3-channel RGB image
+        # self.in_type = enn.FieldType(self.r2_act, 3 * [self.r2_act.trivial_repr])
+
+        # feature types for each stage
+        self.feat64 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(64 / self.S)))
+        self.feat128 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(128 / self.S)))
+        self.feat256 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(256 / self.S)))
+        self.feat512 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(512 / self.S)))
+
+        # initial conv + BN + ReLU
+        #self.conv1 = conv7x7(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
+        if gaussian_blur:
+            self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=stride_s_conv1, padding=padding_s_conv1), 
+                                              enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=1, padding=3))
+        else:
+            self.conv1 = enn.R2Conv(self.encoder.out_type, self.feat64, kernel_size=kernel_s_conv1, stride=stride_s_conv1, padding=padding_s_conv1) # kernel_size=7
+
+        self.bn1 = enn.InnerBatchNorm(self.feat64)
+        self.relu = enn.ReLU(self.feat64)
+
+        if maxpool == 'max':
+            self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=kernel_s_maxpool, stride=2, padding=1) # kernel_size=3
+        elif maxpool == 'avg':
+            self.maxpool = enn.PointwiseAvgPoolAntialiased2D(self.feat64, sigma=0.33, stride=2, padding=1)
+        else:
+            self.maxpool = None
+
+        # ResNet layers
+        self.layer1 = self._make_layer(self.relu.out_type, self.feat64, blocks=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        
+        # Pooling
+        self.avgpool = enn.PointwiseAdaptiveAvgPool(self.layer4.out_type, (1, 1))
+        #self.gpool = enn.GroupPooling(self.layer4.out_type) 
+        self.gpool = enn.GroupPooling(self.avgpool.out_type, mode=self.gpool_mode)
+
+        # Fully connected
+        c = self.gpool.out_type.size
+        print('Final feature dimension:', c)
+        
+        #self.fully_net =  torch.nn.Linear(c, n_classes)
+        
+        self.fully_net = nn.Sequential(
+            nn.Linear(c, projector_hidden_size),
+            # nn.BatchNorm1d(64),
+            nn.ReLU(inplace=True),
+            nn.Linear(projector_hidden_size, n_classes),
+        )
+
+    def _make_layer(self, in_type, out_type, blocks, stride=1, gaussian_blur=False, eq_downsampling=None):
+        print('Make layer')
+        layers = []
+        downsample = None
+        if eq_downsampling == 'kernel_size':
+            kernel_size = 4
+        else:
+            kernel_size = 1
+
+        # nach conv downsample fehlt norm layer (enn.InnerBatchNorm)
+        if stride != 1 or in_type != out_type:
+            if gaussian_blur:
+                downsample = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(in_type, sigma=0.33, stride=stride, padding=1), 
+                                                  conv1x1(in_type, out_type, stride=1, bias=False))
+            else:
+                downsample = enn.SequentialModule(
+                    enn.R2Conv(in_type, out_type, kernel_size=kernel_size, stride=stride, padding=0, bias=False),# schauen, ob padding benötigt  # conv1x1(in_type, out_type, stride=stride, bias=False)
+                    enn.InnerBatchNorm(out_type)
+                )
+        layers.append(EqBasicBlock(in_type, out_type, stride, downsample, eq_downsampling))
+        for _ in range(1, blocks):
+            layers.append(EqBasicBlock(out_type, out_type))
+        
+        return enn.SequentialModule(*layers)
+    
+    def forward(self, x):
+        x = self.encoder(x)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        if self.maxpool is not None:
+            x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        # x = self.gpool(x)
+        #print('Shape after avgpool:', x.tensor.shape)
+
+        hidden = self.gpool(x).tensor.squeeze(-2).squeeze(-1)
+        #hidden = x.tensor.mean((-2,-1))
+        #print('Hidden representation shape:', hidden.shape)
+        # x = x.tensor
+        # b, c, w, h = x.shape
+        # hidden = F.avg_pool2d(x, (w, h))
+        # hidden = hidden.view(hidden.size(0), -1)
+        # hidden = torch.flatten(hidden, 1)
+        
+        z = self.fully_net(hidden)
+
+        return hidden, z
+
+class EqResNet18_hue_test(nn.Module):
+    def __init__(self, N=4, projector_hidden_size=1024, n_classes=128, gaussian_blur=False, maxpool='max', eq_downsampling=None, adjust_channels=None):
+        super().__init__()
+        # Define the rotational and flip symmetry group
+        self.r2_act = gspaces.rot2dOnR2(N)
+        self.maxpool = maxpool
+        self.eq_downsampling = eq_downsampling
+        assert self.eq_downsampling in (None, "kernel_size", "spatial_dim"), \
+            f"eq_downsampling must be None, 'kernel_size', or 'spatial_dim', but got: {self.eq_downsampling}"
+
+        if adjust_channels == 'keep_param':
+            self.S = np.sqrt(self.r2_act.fibergroup.order())
+        elif adjust_channels == 'keep_channels':
+            self.S = self.r2_act.fibergroup.order()
+        else:
+            self.S = 1
+        print(f'S = {self.S}')
+
+        if maxpool is None:
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (4, 2, 1) if eq_downsampling == "kernel_size" else (3, 1, 1)
+            )
+        else:
+            kernel_s_conv1, padding_s_conv1, stride_s_conv1 = (
+                (8, 3, 2) if eq_downsampling == "kernel_size" else (7, 3, 2)
+            )
+            kernel_s_maxpool = 4 if eq_downsampling == "kernel_size" else 3
+
+        self.encoder = enn.HSVHuePhaseEncoder(self.r2_act)
+
+        # input type: 3-channel RGB image
+        # self.in_type = enn.FieldType(self.r2_act, 3 * [self.r2_act.trivial_repr])
+
+        # feature types for each stage
+        self.feat64 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(64 / self.S)))
+        self.feat128 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(128 / self.S)))
+        self.feat256 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(256 / self.S)))
+        self.feat512 = enn.FieldType(self.r2_act, [self.r2_act.regular_repr] * (round(512 / self.S)))
+
+        # initial conv + BN + ReLU
+        #self.conv1 = conv7x7(self.in_type, self.feat64, kernel_size=7, stride=2, padding=3)
+        if gaussian_blur:
+            self.conv1 = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(self.in_type, sigma=0.33, stride=stride_s_conv1, padding=padding_s_conv1), 
+                                              enn.R2Conv(self.in_type, self.feat64, kernel_size=kernel_s_conv1, stride=1, padding=3))
+        else:
+            self.conv1 = enn.R2Conv(self.encoder.out_type, self.feat64, kernel_size=kernel_s_conv1, stride=stride_s_conv1, padding=padding_s_conv1) # kernel_size=7
+
+        self.bn1 = enn.InnerBatchNorm(self.feat64)
+        self.relu = enn.ReLU(self.feat64)
+
+        if maxpool == 'max':
+            self.maxpool = enn.PointwiseMaxPool2D(self.feat64, kernel_size=kernel_s_maxpool, stride=2, padding=1) # kernel_size=3
+        elif maxpool == 'avg':
+            self.maxpool = enn.PointwiseAvgPoolAntialiased2D(self.feat64, sigma=0.33, stride=2, padding=1)
+        else:
+            self.maxpool = None
+
+        # ResNet layers
+        self.layer1 = self._make_layer(self.relu.out_type, self.feat64, blocks=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer2 = self._make_layer(self.layer1.out_type, self.feat128, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer3 = self._make_layer(self.layer2.out_type, self.feat256, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        self.layer4 = self._make_layer(self.layer3.out_type, self.feat512, blocks=2, stride=2, gaussian_blur=gaussian_blur, eq_downsampling=eq_downsampling)
+        
+        # Pooling
+        self.avgpool = enn.PointwiseAdaptiveAvgPool(self.layer4.out_type, (1, 1))
+        #self.gpool = enn.GroupPooling(self.layer4.out_type) 
+        self.gpool = enn.GroupPooling(self.avgpool.out_type)
+
+        # Fully connected
+        c = self.gpool.out_type.size
+        print('Final feature dimension:', c)
+        
+        #self.fully_net =  torch.nn.Linear(c, n_classes)
+        
+        self.fully_net = nn.Sequential(
+            nn.Linear(c, projector_hidden_size),
+            # nn.BatchNorm1d(64),
+            nn.ReLU(inplace=True),
+            nn.Linear(projector_hidden_size, n_classes),
+        )
+
+    def _make_layer(self, in_type, out_type, blocks, stride=1, gaussian_blur=False, eq_downsampling=None):
+        print('Make layer')
+        layers = []
+        downsample = None
+        if eq_downsampling == 'kernel_size':
+            kernel_size = 4
+        else:
+            kernel_size = 1
+
+        # nach conv downsample fehlt norm layer (enn.InnerBatchNorm)
+        if stride != 1 or in_type != out_type:
+            if gaussian_blur:
+                downsample = enn.SequentialModule(enn.PointwiseAvgPoolAntialiased2D(in_type, sigma=0.33, stride=stride, padding=1), 
+                                                  conv1x1(in_type, out_type, stride=1, bias=False))
+            else:
+                downsample = enn.SequentialModule(
+                    enn.R2Conv(in_type, out_type, kernel_size=kernel_size, stride=stride, padding=0, bias=False),# schauen, ob padding benötigt  # conv1x1(in_type, out_type, stride=stride, bias=False)
+                    enn.InnerBatchNorm(out_type)
+                )
+        layers.append(EqBasicBlock(in_type, out_type, stride, downsample, eq_downsampling))
+        for _ in range(1, blocks):
+            layers.append(EqBasicBlock(out_type, out_type))
+        
+        return enn.SequentialModule(*layers)
+    
+    def forward(self, x):
+        x = self.encoder(x)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        if self.maxpool is not None:
+            x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        # x = self.gpool(x)
+        #print('Shape after avgpool:', x.tensor.shape)
+
+        hidden = self.gpool(x).tensor.squeeze(-2).squeeze(-1)
+        #hidden = x.tensor.mean((-2,-1))
+        #print('Hidden representation shape:', hidden.shape)
         # x = x.tensor
         # b, c, w, h = x.shape
         # hidden = F.avg_pool2d(x, (w, h))
