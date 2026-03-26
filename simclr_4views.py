@@ -1,4 +1,3 @@
-# eqCLR_pmnist
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,45 +5,42 @@ from torch.optim import SGD, Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import Dataset, DataLoader
 
+from torchvision.datasets import CIFAR10
+from torchvision.models import resnet18, resnet34, resnet50
 import torchvision.transforms as transforms
-from torchvision.models import resnet18
+import torchvision.transforms.functional as TF
 
 import numpy as np
 import time
-import pickle
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from medmnist import PathMNIST
-
-from eqCLR.eq_resnet import EqResNet18, Mixed_EqResnet18, EqResNet18_SO2, EqResNet18_v2, EqResNet, eq_resnet
-from eqCLR.test_resnet import Wide_ResNet
-from evaluation import model_eval, eval_knn_single, dataset_to_X_y, lin_eval_rep
+import pickle
+from evaluation import model_eval, eval_knn_single, dataset_to_X_y
 
 ###################### PARAMS ##############################
+
+BACKBONE = "resnet18"
+folder = 'results_rs'
 
 BATCH_SIZE = 512
 N_EPOCHS = 100 # 1000
 N_CPU_WORKERS = 16
-BASE_LR = 0.06         # 0.03
+BASE_LR = 0.06         # important (0.03)
 WEIGHT_DECAY = 5e-4    # important
 MOMENTUM = 0.9
 PROJECTOR_HIDDEN_SIZE = 1024
 PROJECTOR_OUTPUT_SIZE = 128
 CROP_LOW_SCALE = 0.2
-GRAYSCALE_PROB = 0.1   # important
+GRAYSCALE_PROB = 0.1   # important (Ifeoma 0.2?)
 PRINT_EVERY_EPOCHS = 1
 EVAL_DURING_TRAIN = True
 ITER_SAVE_EMBED = 50
 IMG_RESIZE = 33  # if None, use original size 28x28
-MAXPOOL = 'max'  # 'avg' or 'max' or None
-N_grid = 16  # for steerable CNN
-IRREPS_L = 12  # for steerable CNN
+MAXPOOL = True
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_resnet34_keepdim_resize33"
-folder = 'results_rs'
-
-print(f"Model filename: {MODEL_FILENAME}")
+MODEL_FILENAME = f"2001_seed0_resnet18_views4x_wo_train"
 
 ###################### DATA LOADER #########################
 
@@ -58,7 +54,6 @@ else:
 
 pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transform)
 pmnist_test = PathMNIST(split='test', download=False, size=28, root='data/pathmnist/', transform=transform)
-pmnist_val = PathMNIST(split='val', download=False, size=28, root='data/pathmnist/', transform=transform)
 print("Data loaded.")
 
 if IMG_RESIZE is None:
@@ -76,7 +71,7 @@ transforms_ssl = transforms.Compose(
     [
         transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
         transforms.RandomResizedCrop(size=IMG_RESIZE, scale=(CROP_LOW_SCALE, 1)),
-        # RandomRightAngleRotation(), # additional rotation
+        RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
@@ -108,6 +103,40 @@ pmnist_loader_ssl = DataLoader(
 
 ###################### NETWORK ARCHITECTURE #########################
 
+class ResNetwithProjector(nn.Module):
+    def __init__(self, backbone_network, maxpool=MAXPOOL):
+        super().__init__()
+
+        self.backbone = backbone_network(weights=None)
+        self.backbone_output_dim = self.backbone.fc.in_features
+
+        if not maxpool:
+            self.backbone.conv1 = nn.Conv2d(
+                3, 64, kernel_size=3, stride=1, padding=1, bias=False
+            )
+            self.backbone.maxpool = nn.Identity()
+            
+        self.backbone.fc = nn.Identity()
+
+        self.projector = nn.Sequential(
+            nn.Linear(self.backbone_output_dim, PROJECTOR_HIDDEN_SIZE), 
+            nn.ReLU(), 
+            nn.Linear(PROJECTOR_HIDDEN_SIZE, PROJECTOR_OUTPUT_SIZE),
+        )
+
+    def forward(self, x):
+        angles = [0, 90, 180, 270]
+        hs = []
+        for angle in angles:
+            x_rot = TF.rotate(x, angle, expand=False)
+            h = self.backbone(x_rot)
+            z = self.projector(h)
+            hs.append(h)
+
+        h_avg = torch.stack(hs, dim=0).mean(dim=0)
+        return h_avg, z
+
+
 def infoNCE(features, temperature=0.5):
     x = F.normalize(features)
     cos_xx = x @ x.T / temperature
@@ -120,12 +149,13 @@ def infoNCE(features, temperature=0.5):
 
     return F.cross_entropy(cos_xx, targets)
 
-# model = Mixed_EqResnet18(resnet18, N=8, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
-#model = Wide_ResNet(10, 4, 0.1, initial_stride=1, N=4, f=False, r=0, num_classes=128)
-model = EqResNet18(N=2, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, adjust_channels='keep_param')
-# model = EqResNet18_SO2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE)
-# model = EqResNet18_v2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, N_grid=N_grid, irreps_L=IRREPS_L, S=1)
-# model = EqResNet(N=4, layers=[3,4,6,3], block='basic', keep_dim=True)
+backbones = {
+   "resnet18": resnet18,    # backbone_output_dim = 512
+   "resnet34": resnet34,    # backbone_output_dim = 512
+   "resnet50": resnet50,    # backbone_output_dim = 2048
+}
+
+model = ResNetwithProjector(backbones[BACKBONE])
 
 optimizer = SGD(
     model.parameters(),
@@ -148,13 +178,13 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 #     milestones=[10],
 # )
 
-###################### TRAINING LOOP #########################
+# ###################### TRAINING LOOP #########################
 
 # print("Starting training.")
 
-# device = "cuda"
+device = "cuda"
+model.to(device)
 
-# model.to(device)
 # model.train()
 # knn_dict = {}
 # embed_dict = {}
@@ -167,7 +197,6 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 
 #     for batch_idx, batch in enumerate(pmnist_loader_ssl):
 #         views, _ = batch
-
 #         views = [view.to(device, non_blocking=True) for view in views]
 
 #         optimizer.zero_grad()
@@ -184,12 +213,11 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 #     time_train += end_time - start_time
 
 #     scheduler.step()
-
 #     if EVAL_DURING_TRAIN:
 #         model.eval()
 #         with torch.no_grad():
-#             X_train, y_train, Z_train = dataset_to_X_y(pmnist_val, model)
-#             X_test, y_test, Z_test = dataset_to_X_y(pmnist_val, model)
+#             X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
+#             X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
 
 #             knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
 #             knn_dict[epoch] = knn_acc
@@ -220,13 +248,12 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 #     flush=True
 # )
 
-# model.eval()
-# torch.save(model.state_dict(), f'{folder}/model_weights/{MODEL_FILENAME}_weights.pt')
+# torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_weights.pt')
 # print(f"Model saved to {MODEL_FILENAME}_weights.pt")
 
 # model_details = {
 #     "Filename": MODEL_FILENAME,
-#     "Model structure": str(model),
+#     "Model": str(model),
 #     "N_EPOCHS": N_EPOCHS,
 #     "BATCH_SIZE": BATCH_SIZE,
 #     "BASE_LR": BASE_LR,
@@ -239,26 +266,36 @@ scheduler = CosineAnnealingLR(optimizer, T_max=N_EPOCHS)
 #     "Training augmentations": transforms_ssl,
 #     "Training time": training_end_time - training_start_time,
 #     "Training time w/o evaluation": time_train,
-#     "MAXPOOL": MAXPOOL,
 #     "KNN during training": knn_dict,
-#     "IMG_RESIZE": IMG_RESIZE,
+#     "Image resize": IMG_RESIZE,
 #     "Embeddings during training": embed_dict,
-#     "N_grid": N_grid,
 # }
 
-# with open(f'{folder}/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
+# with open(f'results/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
 #     pickle.dump(model_details, f)
     
 # print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
 
-#### Load weights (optional) ####
-device = "cuda"
-model.to(device)
-model.load_state_dict(torch.load(f'results_rs/model_weights/0001__seed0_path_mnist-eqCLR_resnet18_N2_kp_1000epochs_weights.pt', weights_only=True))
+###################### EVALUATION #########################
+
+# load weights
+weights_path = 'results_rs/model_weights/1001_seed0_resnet18_pathmnist_1000epochs_weights.pt'
+model.load_state_dict(torch.load(weights_path, weights_only=True))
 print('Weights loaded.')
+
+model_details = {
+    "Filename": MODEL_FILENAME,
+    "Model": str(model),
+    "Weights path": weights_path,
+}
+
+with open(f'{folder}/model_details/{MODEL_FILENAME}_details.pkl', 'wb') as f:
+    pickle.dump(model_details, f)
+    
+print(f"Model details saved to {MODEL_FILENAME}_details.pkl")
+
 model.eval()
 
-###################### EVALUATION #########################
 transforms_classifier = transforms.Compose(
     [
         transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
@@ -283,19 +320,15 @@ eval_dict = model_eval(
     pmnist_train,
     pmnist_test,
     pmnist_loader_classifier,
-    n_classes=9,
-)
+    n_classes=9)
 
 with open(f'{folder}/model_eval/{MODEL_FILENAME}_eval.pkl', 'wb') as f:
     pickle.dump(eval_dict, f)
 
-print(f"Evaluation results saved to {MODEL_FILENAME}_eval.pkl")
-
 ###################### ROTATION EVALUATION #########################
-from escnn.nn import EquivariantModule
-from rotation_eval import pred_consistency_90deg, check_equivariance_90deg
+from rotation_eval import pred_consistency_90deg, check_equivariance_torch
 
-EquivariantModule.check_equivariance_90deg = check_equivariance_90deg
+nn.Module.check_equivariance_torch = check_equivariance_torch
 
 input_sizes = {}
 
@@ -316,14 +349,13 @@ with torch.no_grad():
 
 for h in hooks:
     h.remove()
-
+    
 # Equivariance error per layer
 eq_errors = {}
 
 for name, module in model.named_modules():
-    if isinstance(module, EquivariantModule):
-        size = input_sizes.get(name)[-1]
-        error = module.check_equivariance_90deg(x_size=size)
+    if isinstance(module, nn.Conv2d):
+        error = module.check_equivariance_torch()
         eq_errors[name] = error
 
 # Classification consistency under rotation

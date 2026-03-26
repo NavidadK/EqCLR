@@ -39,7 +39,7 @@ ITER_SAVE_EMBED = 50
 IMG_RESIZE = 33  # if None, use original size 28x28
 MAXPOOL = True
 
-for rs in [0, 1, 2]:
+for rs in [2]:
     MODEL_FILENAME = f"1001_seed{rs}_{BACKBONE}_pathmnist_1000epochs"
 
     ###################### DATA LOADER #########################
@@ -54,6 +54,7 @@ for rs in [0, 1, 2]:
 
     pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transform)
     pmnist_test = PathMNIST(split='test', download=False, size=28, root='data/pathmnist/', transform=transform)
+    pmnist_val = PathMNIST(split='val', download=False, size=28, root='data/pathmnist/', transform=transform)
     print("Data loaded.")
 
     if IMG_RESIZE is None:
@@ -209,8 +210,8 @@ for rs in [0, 1, 2]:
         if EVAL_DURING_TRAIN:
             model.eval()
             with torch.no_grad():
-                X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
-                X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+                X_train, y_train, Z_train = dataset_to_X_y(pmnist_val, model)
+                X_test, y_test, Z_test = dataset_to_X_y(pmnist_val, model)
 
                 knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
                 knn_dict[epoch] = knn_acc
@@ -241,7 +242,7 @@ for rs in [0, 1, 2]:
         flush=True
     )
 
-    torch.save(model.state_dict(), f'results/model_weights/{MODEL_FILENAME}_weights.pt')
+    torch.save(model.state_dict(), f'{folder}/model_weights/{MODEL_FILENAME}_weights.pt')
     print(f"Model saved to {MODEL_FILENAME}_weights.pt")
 
     model_details = {

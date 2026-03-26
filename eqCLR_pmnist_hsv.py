@@ -42,7 +42,7 @@ MAXPOOL = 'max'  # 'avg' or 'max' or None
 N_grid = 16  # for steerable CNN
 IRREPS_L = 12  # for steerable CNN
 
-MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_hsv_rot_eq_4dim_input"
+MODEL_FILENAME = f"{np.random.randint(10000):04}-path_mnist-eqCLR_hsv_rot_eq_4dim_input_test2"
 
 print(f"Model filename: {MODEL_FILENAME}")
 
@@ -84,7 +84,7 @@ transforms_ssl = transforms.Compose(
     [
         transforms.Resize((IMG_RESIZE, IMG_RESIZE)),
         transforms.RandomResizedCrop(size=IMG_RESIZE, scale=(CROP_LOW_SCALE, 1)),
-        # RandomRightAngleRotation(), # additional rotation
+        RandomRightAngleRotation(), # additional rotation
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
@@ -136,7 +136,7 @@ def infoNCE(features, temperature=0.5):
 # model = EqResNet18_v2(N=-1, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, N_grid=N_grid, irreps_L=IRREPS_L, S=1)
 # model = EqResNet(N=4, layers=[3,4,6,3], block='basic', keep_dim=True)
 # model = EqResNet18_hue(N=4, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, adjust_channels='keep_param')
-model = EqResNet18_hue_test(N=4, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, adjust_channels='keep_param')
+model = EqResNet18_hue(N=4, maxpool=MAXPOOL, projector_hidden_size=PROJECTOR_HIDDEN_SIZE, n_classes=PROJECTOR_OUTPUT_SIZE, adjust_channels='keep_param')
 
 
 optimizer = SGD(

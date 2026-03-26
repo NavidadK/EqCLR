@@ -44,7 +44,10 @@ IRREPS_L = 12  # for steerable CNN
 
 for seed in [0, 1, 2]:
     for N in [1, 2, 4, 6, 8, 10, 12, 16]:
-        MODEL_FILENAME = f"0001__seed{seed}_path_mnist-eqCLR_resnet18_N{N}_kp_1000epochs"
+
+        # if seed == 0 and N in [1, 2, 4, 6]:
+        #     continue
+        MODEL_FILENAME = f"0002_seed{seed}_path_mnist-eqCLR_resnet18_N{N}_kp_1000epochs"
 
         print(f"Model filename: {MODEL_FILENAME}")
 
@@ -60,6 +63,7 @@ for seed in [0, 1, 2]:
 
         pmnist_train = PathMNIST(split='train', download=False, size=28, root='data/pathmnist/', transform=transform)
         pmnist_test = PathMNIST(split='test', download=False, size=28, root='data/pathmnist/', transform=transform)
+        pmnist_val = PathMNIST(split='val', download=False, size=28, root='data/pathmnist/', transform=transform)
         print("Data loaded.")
 
         if IMG_RESIZE is None:
@@ -189,7 +193,7 @@ for seed in [0, 1, 2]:
                 model.eval()
                 with torch.no_grad():
                     X_train, y_train, Z_train = dataset_to_X_y(pmnist_train, model)
-                    X_test, y_test, Z_test = dataset_to_X_y(pmnist_test, model)
+                    X_test, y_test, Z_test = dataset_to_X_y(pmnist_val, model)
 
                     knn_acc = eval_knn_single(X_train, y_train, X_test, y_test)
                     knn_dict[epoch] = knn_acc
