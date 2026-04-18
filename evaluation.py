@@ -273,3 +273,21 @@ def model_eval(model, data_train, data_test, loader_classifier, n_classes, eval_
         eval_dict["linear_accuracy_aug"] = lin_acc_aug
 
     return eval_dict
+
+def should_eval(epoch, n_epochs=1000):
+    if epoch < 10:
+        return True          # every epoch
+    elif epoch < 50:
+        return epoch % 2 == 0
+    elif epoch < 100:
+        return epoch % 5 == 0
+    elif epoch < 150:
+        return epoch % 10 == 0
+    elif epoch < 300:
+        return epoch % 15 == 0
+    elif epoch < 500:
+        return epoch % 20 == 0
+    elif epoch == n_epochs - 1:
+        return True
+    else:
+        return epoch % 25 == 0
